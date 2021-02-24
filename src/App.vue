@@ -136,7 +136,7 @@
         </h3>
         <div class="flex items-end border-gray-600 border-b border-l h-64">
           <div
-            v-for="(bar, idx) in normalizeGraph(selectedTicker.name)"
+            v-for="(bar, idx) in normalizeGraph(selectedTicker)"
             :key="idx"
             :style="{ height: `${bar}%` }"
             class="bg-purple-800 border w-10 h-24"
@@ -177,24 +177,51 @@
 <script>
 export default {
   name: 'App',
+
   data() {
     return {
       ticker: '',
       tickersList: [],
       selectedTicker: null,
-      graph: {},
-      intervals: {},
       coinList: {},
       isLoading: null,
       hints: [],
       error: false,
     };
   },
+
+  mounted() {
+    const tickersData = localStorage.getItem('ticker-list');
+    if (tickersData) {
+      this.tickersList = JSON.parse(tickersData);
+    }
+    this.tickersList.map((el) => this.subscribeToUpdates(el));
+    this.fetchCoinList();
+  },
+
   methods: {
+    subscribeToUpdates(ticker) {
+      const index = this.calculateIndex(ticker);
+
+      this.tickersList[index].interval = setInterval(async () => {
+        const tempTicker = ticker;
+        const tempIdx = this.calculateIndex(tempTicker);
+        const res = await fetch(
+          `https://min-api.cryptocompare.com/data/price?fsym=${tempTicker.name}&tsyms=USD&api_key=318ca6b6195461a25759cf231d0b4c70c88a4c58748a552c212f4b316e7a16bd`
+        );
+        const data = await res.json();
+        this.tickersList[tempIdx].price =
+          data.USD > 1 ? data.USD.toFixed(2) : data.USD.toPrecision(2);
+        this.tickersList[tempIdx].graph.push(data.USD);
+      }, 3000);
+    },
+
     addTicker(coin) {
       const newTicker = {
         name: coin || this.ticker.toUpperCase(),
         price: '-',
+        graph: [],
+        interval: null,
       };
       if (
         this.tickersList.reduce((acc, el) => {
@@ -206,33 +233,35 @@ export default {
         return;
       }
 
-      this.tickersList.push(newTicker);
-      this.graph[newTicker.name] = [];
-      this.intervals[newTicker.name] = setInterval(async () => {
-        const res = await fetch(
-          `https://min-api.cryptocompare.com/data/price?fsym=${newTicker.name}&tsyms=USD&api_key=318ca6b6195461a25759cf231d0b4c70c88a4c58748a552c212f4b316e7a16bd`
-        );
-        const data = await res.json();
-        this.tickersList.find((el) => el.name === newTicker.name).price =
-          data.USD > 1 ? data.USD.toFixed(2) : data.USD.toPrecision(2);
-        if (this.graph[newTicker.name]) {
-          this.graph[newTicker.name].push(data.USD);
-        }
-      }, 3000);
+      this.tickersList = [...this.tickersList, newTicker];
+
+      this.subscribeToUpdates(newTicker);
+
       this.ticker = '';
     },
-    deleteTicker(tickerToRemove) {
-      this.tickersList = this.tickersList.filter((el) => el !== tickerToRemove);
-      clearInterval(this.intervals[tickerToRemove.name]);
-      this.selectedTicker = null;
+
+    calculateIndex(ticker) {
+      return this.tickersList.findIndex((el) => el.name === ticker.name);
     },
+    deleteTicker(tickerToRemove) {
+      const index = this.calculateIndex(tickerToRemove);
+      clearInterval(this.tickersList[index].interval);
+      this.tickersList[index].interval = null;
+      this.tickersList = this.tickersList.filter((el, idx) => idx !== index);
+      if (tickerToRemove === this.selectedTicker) {
+        this.selectedTicker = null;
+      }
+    },
+
     normalizeGraph(currentTicker) {
-      const maxPrice = Math.max(...this.graph[currentTicker]);
-      const minPrice = Math.min(...this.graph[currentTicker]);
-      return this.graph[currentTicker].map(
+      const index = this.calculateIndex(currentTicker);
+      const maxPrice = Math.max(...currentTicker.graph);
+      const minPrice = Math.min(...currentTicker.graph);
+      return this.tickersList[index].graph.map(
         (price) => 5 + ((price - minPrice) * 95) / (maxPrice - minPrice)
       );
     },
+
     fetchCoinList() {
       (async () => {
         this.isLoading = true;
@@ -246,11 +275,14 @@ export default {
       })();
     },
   },
-  mounted: function() {
-    this.fetchCoinList();
-  },
+
+  computed: {},
+
   watch: {
-    ticker: function() {
+    tickersList(data) {
+      localStorage.setItem('ticker-list', JSON.stringify(data));
+    },
+    ticker() {
       const coinList = this.coinList;
       this.error = false;
       this.hints = this.hints.filter((el) => {
