@@ -38,6 +38,7 @@
               <input
                 v-model="ticker"
                 @keydown.enter="addTicker()"
+                autocomplete="off"
                 type="text"
                 name="wallet"
                 id="wallet"
@@ -92,6 +93,7 @@
           <div class="mt-1 relative rounded-md shadow-md w-40">
             <input
               v-model="filter"
+              autocomplete="off"
               class="block w-full pl-2 pr-4 border-gray-300 text-gray-900 focus:outline-none focus:ring-gray-500 focus:border-gray-500 sm:text-sm rounded-md"
             />
           </div>
@@ -114,7 +116,7 @@
         <hr class="w-full border-t border-gray-600 my-4" />
         <dl class="mt-5 grid grid-cols-1 gap-5 sm:grid-cols-3">
           <div
-            v-for="(tick, idx) of filteredTickers()"
+            v-for="(tick, idx) of paginatedTickers"
             :key="idx"
             @click="selectedTicker = tick"
             :class="selectedTicker === tick ? 'border-4' : ''"
@@ -157,7 +159,7 @@
         </h3>
         <div class="flex items-end border-gray-600 border-b border-l h-64">
           <div
-            v-for="(bar, idx) in normalizeGraph(selectedTicker)"
+            v-for="(bar, idx) in normalizedGraph"
             :key="idx"
             :style="{ height: `${bar}%` }"
             class="bg-purple-800 border w-10 h-24"
@@ -210,22 +212,21 @@ export default {
       error: false,
       page: 1,
       filter: '',
-      hasNextPage: false,
     };
   },
 
-  mounted() {
+  created() {
+    const VALID_KEYS = ['filter', 'page'];
+
     const windowData = Object.fromEntries(
       new URL(window.location).searchParams.entries()
     );
 
-    if (windowData.filter) {
-      this.filter = windowData.filter;
-    }
-
-    if (windowData.page) {
-      this.page = +windowData.page;
-    }
+    VALID_KEYS.forEach((key) => {
+      if (windowData[key]) {
+        this[key] = windowData[key];
+      }
+    });
 
     const tickersData = localStorage.getItem('ticker-list');
 
@@ -237,17 +238,52 @@ export default {
     this.fetchCoinList();
   },
 
-  methods: {
-    filteredTickers() {
-      const start = (this.page - 1) * 6;
-      const end = this.page * 6;
-      const filteredTickers = this.tickersList.filter((ticker) =>
-        ticker.name.includes(this.filter)
-      );
-      this.hasNextPage = filteredTickers.length > end;
-      return filteredTickers.slice(start, end);
+  computed: {
+    pageIndexStart() {
+      return (this.page - 1) * 6;
     },
 
+    pageIndexEnd() {
+      return this.page * 6;
+    },
+
+    filteredTickers() {
+      return this.tickersList.filter((ticker) =>
+        ticker.name.includes(this.filter)
+      );
+    },
+
+    paginatedTickers() {
+      return this.filteredTickers.slice(this.pageIndexStart, this.pageIndexEnd);
+    },
+
+    hasNextPage() {
+      return this.filteredTickers.length > this.pageIndexEnd;
+    },
+
+    normalizedGraph() {
+      const index = this.calculateIndex(this.selectedTicker);
+      const maxPrice = Math.max(...this.selectedTicker.graph);
+      const minPrice = Math.min(...this.selectedTicker.graph);
+
+      if (minPrice === maxPrice) {
+        return this.tickersList[index].graph.map(() => 50);
+      }
+
+      return this.tickersList[index].graph.map(
+        (price) => 5 + ((price - minPrice) * 95) / (maxPrice - minPrice)
+      );
+    },
+
+    pageStateOptions() {
+      return {
+        page: this.page,
+        filter: this.filter,
+      };
+    },
+  },
+
+  methods: {
     subscribeToUpdates(ticker) {
       const index = this.calculateIndex(ticker);
 
@@ -265,23 +301,27 @@ export default {
     },
 
     addTicker(coin) {
+      if (this.ticker === '') {
+        return;
+      }
       const newTicker = {
         name: coin || this.ticker.toUpperCase(),
         price: '-',
         graph: [],
         interval: null,
       };
+
       if (
-        this.tickersList.reduce((acc, el) => {
-          if (el.name === newTicker.name) return true;
-          return acc;
-        }, false)
+        this.tickersList.findIndex((el) => el.name === newTicker.name) !== -1
       ) {
         this.error = true;
         return;
       }
+
       this.tickersList = [...this.tickersList, newTicker];
+
       this.subscribeToUpdates(newTicker);
+
       this.ticker = '';
       this.filter = '';
     },
@@ -292,21 +332,16 @@ export default {
 
     deleteTicker(tickerToRemove) {
       const index = this.calculateIndex(tickerToRemove);
+
       clearInterval(this.tickersList[index].interval);
+
       this.tickersList[index].interval = null;
+
       this.tickersList = this.tickersList.filter((el, idx) => idx !== index);
+
       if (tickerToRemove === this.selectedTicker) {
         this.selectedTicker = null;
       }
-    },
-
-    normalizeGraph(currentTicker) {
-      const index = this.calculateIndex(currentTicker);
-      const maxPrice = Math.max(...currentTicker.graph);
-      const minPrice = Math.min(...currentTicker.graph);
-      return this.tickersList[index].graph.map(
-        (price) => 5 + ((price - minPrice) * 95) / (maxPrice - minPrice)
-      );
     },
 
     fetchCoinList() {
@@ -316,19 +351,24 @@ export default {
           'https://min-api.cryptocompare.com/data/all/coinlist?summary=true'
         );
         const coinList = await res.json();
-        const data = coinList.Data;
-        this.coinList = data;
+
+        this.coinList = coinList.Data;
         this.isLoading = false;
       })();
     },
   },
 
-  computed: {},
-
   watch: {
+    paginatedTickers() {
+      if (this.paginatedTickers.length === 0 && this.page > 1) {
+        this.page -= 1;
+      }
+    },
+
     tickersList(data) {
       localStorage.setItem('ticker-list', JSON.stringify(data));
     },
+
     ticker() {
       const coinList = this.coinList;
       this.error = false;
@@ -345,19 +385,16 @@ export default {
         }
       }
     },
+
     filter() {
       this.page = 1;
-      window.history.pushState(
-        null,
-        document.title,
-        `${window.location.pathname}?filter=${this.filter}&page=${this.page}`
-      );
     },
-    page() {
+
+    pageStateOptions(value) {
       window.history.pushState(
         null,
         document.title,
-        `${window.location.pathname}?filter=${this.filter}&page=${this.page}`
+        `${window.location.pathname}?filter=${value.filter}&page=${value.page}`
       );
     },
   },
