@@ -59,8 +59,8 @@
                 {{ hint }}
               </span>
             </div>
-            <div v-if="error" class="text-sm text-red-600">
-              Такой тикер уже добавлен
+            <div v-if="error.status" class="text-sm text-red-600">
+              {{ error.msg }}
             </div>
           </div>
         </div>
@@ -209,7 +209,7 @@ export default {
       coinList: {},
       isLoading: null,
       hints: [],
-      error: false,
+      error: { status: false, msg: '' },
       page: 1,
       filter: '',
     };
@@ -302,8 +302,15 @@ export default {
 
     addTicker(coin) {
       if (this.ticker === '') {
+        this.error = { status: true, msg: 'Нужно ввести что нибудь' };
         return;
       }
+
+      if (!coin && !this.coinList[this.ticker]) {
+        this.error = { status: true, msg: 'Такого тикера не существует' };
+        return;
+      }
+
       const newTicker = {
         name: coin || this.ticker.toUpperCase(),
         price: '-',
@@ -314,7 +321,7 @@ export default {
       if (
         this.tickersList.findIndex((el) => el.name === newTicker.name) !== -1
       ) {
-        this.error = true;
+        this.error = { status: true, msg: 'Такой тикер уже добавлен' };
         return;
       }
 
@@ -371,7 +378,7 @@ export default {
 
     ticker() {
       const coinList = this.coinList;
-      this.error = false;
+      this.error.status = false;
       this.hints = this.hints.filter((el) => {
         el.includes(this.ticker);
       });
